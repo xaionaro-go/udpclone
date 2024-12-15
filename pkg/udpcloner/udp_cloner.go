@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/facebookincubator/go-belt/tool/logger"
+	"github.com/xaionaro-go/udpclone/pkg/xsync"
 )
 
 const bufSize = 1 << 20
@@ -17,11 +18,11 @@ const bufSize = 1 << 20
 type UDPCloner struct {
 	listener *net.UDPConn
 
-	clientAddrLocker sync.Mutex
+	clientAddrLocker xsync.Mutex
 	clientAddr       *net.UDPAddr
 
-	destinationsLocker     sync.Mutex
-	destinationConnsLocker sync.Mutex
+	destinationsLocker     xsync.Mutex
+	destinationConnsLocker xsync.Mutex
 
 	destinations     []string
 	destinationConns map[string]*connT
@@ -43,10 +44,13 @@ func New(listenAddr string) (*UDPCloner, error) {
 	}, nil
 }
 
-func (c *UDPCloner) AddDestination(dst string) {
-	c.destinationsLocker.Lock()
-	defer c.destinationsLocker.Unlock()
-	c.destinations = append(c.destinations, dst)
+func (c *UDPCloner) AddDestination(
+	ctx context.Context,
+	dst string,
+) {
+	c.destinationConnsLocker.Do(ctx, func() {
+		c.destinations = append(c.destinations, dst)
+	})
 }
 
 func (c *UDPCloner) tryCreatingMissingConns(ctx context.Context) {
@@ -57,12 +61,10 @@ func (c *UDPCloner) tryCreatingMissingConns(ctx context.Context) {
 		addrs []string
 		conns map[string]*connT
 	)
-	func() {
-		c.destinationsLocker.Lock()
-		defer c.destinationsLocker.Unlock()
+	c.destinationsLocker.Do(ctx, func() {
 		addrs = copySlice(c.destinations)
 		conns = copyMap(c.destinationConns)
-	}()
+	})
 
 	var wg sync.WaitGroup
 	for _, dst := range addrs {
@@ -93,44 +95,55 @@ func (c *UDPCloner) tryCreatingMissingConns(ctx context.Context) {
 					return
 				}
 				logger.Debugf(ctx, "unable to forward back from '%s': %v", udpConn.RemoteAddr().String(), err)
-				c.destinationsLocker.Lock()
-				defer c.destinationsLocker.Unlock()
-				if errors.As(conn.Close(), &ErrAlreadyClosed{}) {
-					return
-				}
-				c.delConn(dst)
-				conn.Wait()
+
+				c.destinationsLocker.Do(ctx, func() {
+					if errors.As(conn.Close(), &ErrAlreadyClosed{}) {
+						return
+					}
+					c.delConn(ctx, dst)
+					conn.Wait()
+				})
 			}(conn, dst)
 			logger.Debugf(ctx, "connected to '%s'", dst)
-			c.setConn(dst, conn)
+			c.setConn(ctx, dst, conn)
 		}(dst)
 	}
 
 	wg.Wait()
 }
 
-func (c *UDPCloner) GetClientAddr() *net.UDPAddr {
-	c.clientAddrLocker.Lock()
-	defer c.clientAddrLocker.Unlock()
-	return c.clientAddr
+func (c *UDPCloner) GetClientAddr(ctx context.Context) *net.UDPAddr {
+	return xsync.DoR1(ctx, &c.clientAddrLocker, func() *net.UDPAddr {
+		return c.clientAddr
+	})
 }
 
-func (c *UDPCloner) setConn(addr string, conn *connT) {
-	c.destinationConnsLocker.Lock()
-	defer c.destinationConnsLocker.Unlock()
-	c.destinationConns[addr] = conn
+func (c *UDPCloner) setConn(
+	ctx context.Context,
+	addr string,
+	conn *connT,
+) {
+	c.destinationConnsLocker.Do(ctx, func() {
+		c.destinationConns[addr] = conn
+	})
 }
 
-func (c *UDPCloner) getConn(addr string) *connT {
-	c.destinationConnsLocker.Lock()
-	defer c.destinationConnsLocker.Unlock()
-	return c.destinationConns[addr]
+func (c *UDPCloner) getConn(
+	ctx context.Context,
+	addr string,
+) *connT {
+	return xsync.DoR1(ctx, &c.destinationConnsLocker, func() *connT {
+		return c.destinationConns[addr]
+	})
 }
 
-func (c *UDPCloner) delConn(addr string) {
-	c.destinationConnsLocker.Lock()
-	defer c.destinationConnsLocker.Unlock()
-	delete(c.destinationConns, addr)
+func (c *UDPCloner) delConn(
+	ctx context.Context,
+	addr string,
+) {
+	c.destinationConnsLocker.Do(ctx, func() {
+		delete(c.destinationConns, addr)
+	})
 }
 
 func (c *UDPCloner) ServeContext(ctx context.Context) error {
@@ -161,16 +174,12 @@ func (c *UDPCloner) ServeContext(ctx context.Context) error {
 		if n >= bufSize {
 			return fmt.Errorf("received too large message, not supported yet: %d >= %d", n, bufSize)
 		}
-		func() {
-			c.clientAddrLocker.Lock()
-			defer c.clientAddrLocker.Unlock()
+		c.clientAddrLocker.Do(ctx, func() {
 			c.clientAddr = udpAddr
-		}()
+		})
 
 		msg := buf[:n]
-		func() {
-			c.destinationsLocker.Lock()
-			defer c.destinationsLocker.Unlock()
+		c.destinationsLocker.Do(ctx, func() {
 			keys := make([]string, 0, len(c.destinationConns))
 			for key := range c.destinationConns {
 				keys = append(keys, key)
@@ -182,7 +191,7 @@ func (c *UDPCloner) ServeContext(ctx context.Context) error {
 				wg.Add(1)
 				go func(dst string) {
 					defer wg.Done()
-					conn := c.getConn(dst)
+					conn := c.getConn(ctx, dst)
 					w, err := conn.Write(msg)
 					if err == nil && w == n {
 						logger.Tracef(ctx, "wrote a message from the listener to '%s' of size %d", dst, n)
@@ -196,11 +205,11 @@ func (c *UDPCloner) ServeContext(ctx context.Context) error {
 					if errors.As(conn.Close(), &ErrAlreadyClosed{}) {
 						return
 					}
-					c.delConn(dst)
+					c.delConn(ctx, dst)
 					conn.Wait()
 				}(dst)
 			}
 			wg.Wait()
-		}()
+		})
 	}
 }

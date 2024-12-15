@@ -25,7 +25,7 @@ func newConn(
 }
 
 type clientAddrGetter interface {
-	GetClientAddr() *net.UDPAddr
+	GetClientAddr(context.Context) *net.UDPAddr
 }
 
 func (c *connT) copyTo(
@@ -51,7 +51,7 @@ func (c *connT) copyTo(
 		}
 
 		msg := buf[:n]
-		addr := clientAddrGetter.GetClientAddr()
+		addr := clientAddrGetter.GetClientAddr(ctx)
 		w, err := target.WriteToUDP(msg, addr)
 		if err != nil {
 			return fmt.Errorf("unable to write to '%s': %w", addr.String(), err)

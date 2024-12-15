@@ -36,7 +36,7 @@ func main() {
 	}
 
 	for _, dst := range *destinations {
-		cloner.AddDestination(dst)
+		cloner.AddDestination(ctx, dst)
 	}
 
 	logger.Infof(ctx, "started")
