@@ -5,11 +5,3 @@ func copySlice[T any](in []T) []T {
 	result = append(result, in...)
 	return result
 }
-
-func copyMap[K comparable, V any](in map[K]V) map[K]V {
-	result := make(map[K]V, len(in))
-	for k, v := range in {
-		result[k] = v
-	}
-	return result
-}
