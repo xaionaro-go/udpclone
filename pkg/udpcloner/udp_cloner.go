@@ -149,6 +149,7 @@ func (c *UDPCloner) ServeContext(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("unable to read from the listener: %w", err)
 		}
+		logger.Tracef(ctx, "received on the listener a message of size %d", n)
 		if n >= bufSize {
 			return fmt.Errorf("received too large message, not supported yet: %d >= %d", n, bufSize)
 		}
@@ -176,6 +177,7 @@ func (c *UDPCloner) ServeContext(ctx context.Context) error {
 					conn := c.getConn(dst)
 					w, err := conn.Write(msg)
 					if err == nil && w == n {
+						logger.Tracef(ctx, "wrote a message from the listener to '%s' of size %d", dst, n)
 						return
 					}
 					if err != nil {

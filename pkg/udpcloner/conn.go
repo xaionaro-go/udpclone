@@ -45,6 +45,7 @@ func (c *connT) copyTo(
 		if err != nil {
 			return fmt.Errorf("unable to read from the listener: %w", err)
 		}
+		logger.Tracef(ctx, "received a message from the connection '%s' of size %d", c.RemoteAddr(), n)
 		if n >= bufSize {
 			return fmt.Errorf("received too large message, not supported yet: %d >= %d", n, bufSize)
 		}
@@ -55,6 +56,7 @@ func (c *connT) copyTo(
 		if err != nil {
 			return fmt.Errorf("unable to write to '%s': %w", addr.String(), err)
 		}
+		logger.Tracef(ctx, "wrote a message from the connection '%s' to '%s' of size %d", c.RemoteAddr(), addr, n)
 		if w != n {
 			return fmt.Errorf("wrote a short message to '%s': %d != %d", addr.String(), w, n)
 		}
