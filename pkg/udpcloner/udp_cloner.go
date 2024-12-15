@@ -113,8 +113,8 @@ func (c *UDPCloner) tryCreatingMissingConns(ctx context.Context) {
 						return
 					}
 					c.delConn(ctx, dst.Address)
-					conn.Wait()
 				})
+				conn.Wait()
 			}(conn, dst)
 			logger.Debugf(ctx, "connected to '%s'", dst)
 			c.setConn(ctx, dst.Address, conn)
@@ -157,7 +157,7 @@ func (c *UDPCloner) killStaleDestinationConns(ctx context.Context) {
 
 	c.destinationConnsLocker.Do(ctx, func() {
 		for addr, conn := range c.destinationConns {
-			if conn.destination.ResponseTimeout <= 0 {
+			if conn.ResponseTimeout <= 0 {
 				continue
 			}
 
@@ -175,46 +175,48 @@ func (c *UDPCloner) killStaleDestinationConns(ctx context.Context) {
 				continue
 			}
 			delete(c.destinationConns, addr)
-			conn.Wait()
 		}
 	})
 }
 
 func (c *UDPCloner) checkResolvedAddrs(ctx context.Context) {
 	now := time.Now()
-
+	conns := map[string]*destinationConn{}
 	c.destinationConnsLocker.Do(ctx, func() {
-		for addr, conn := range c.destinationConns {
-			if conn.destination.ResolveUpdateInterval <= 0 {
-				continue
-			}
+		conns = copyMap(c.destinationConns)
+	})
 
-			resolveTS := conn.ResolveTS.Load().(time.Time)
-			if now.Sub(resolveTS) <= conn.destination.ResolveUpdateInterval {
-				continue
-			}
+	for addr, conn := range conns {
+		if conn.destination.ResolveUpdateInterval <= 0 {
+			continue
+		}
 
-			logger.Debugf(ctx, "re-resolving '%s'", addr)
-			udpAddr, err := net.ResolveUDPAddr("udp", addr)
-			if err != nil {
-				logger.Errorf(ctx, "unable to resolve '%s': %v", addr, err)
-				continue
-			}
-			logger.Debugf(ctx, "resolving '%s' as %s", addr, udpAddr)
+		resolveTS := conn.ResolveTS.Load().(time.Time)
+		if now.Sub(resolveTS) <= conn.destination.ResolveUpdateInterval {
+			continue
+		}
 
-			if conn.UDPConn.RemoteAddr().String() == udpAddr.String() {
-				logger.Debugf(ctx, "the resolved address of '%s' have not changed", addr)
-				continue
-			}
+		logger.Debugf(ctx, "re-resolving '%s'", addr)
+		udpAddr, err := net.ResolveUDPAddr("udp", addr)
+		if err != nil {
+			logger.Errorf(ctx, "unable to resolve '%s': %v", addr, err)
+			continue
+		}
+		logger.Debugf(ctx, "resolving '%s' as %s", addr, udpAddr)
 
-			logger.Infof(ctx, "the resolved address of '%s' have changed to '%s', closing the old connection (%s)", addr, udpAddr.String(), conn.RemoteAddr().String())
+		if conn.UDPConn.RemoteAddr().String() == udpAddr.String() {
+			logger.Debugf(ctx, "the resolved address of '%s' have not changed", addr)
+			continue
+		}
+
+		logger.Infof(ctx, "the resolved address of '%s' have changed to '%s', closing the old connection (%s)", addr, udpAddr.String(), conn.RemoteAddr().String())
+		c.destinationConnsLocker.Do(ctx, func() {
 			if errors.As(conn.Close(), &ErrAlreadyClosed{}) {
-				continue
+				return
 			}
 			delete(c.destinationConns, addr)
-			conn.Wait()
-		}
-	})
+		})
+	}
 }
 
 func (c *UDPCloner) ServeContext(
@@ -284,7 +286,6 @@ func (c *UDPCloner) ServeContext(
 					return
 				}
 				c.delConn(ctx, dst)
-				conn.Wait()
 			}(addr, msg)
 		}
 	}
