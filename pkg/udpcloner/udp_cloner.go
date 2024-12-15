@@ -53,12 +53,20 @@ func (c *UDPCloner) tryCreatingMissingConns(ctx context.Context) {
 	logger.Tracef(ctx, "tryCreatingMissingConns")
 	defer logger.Tracef(ctx, "/tryCreatingMissingConns")
 
-	c.destinationsLocker.Lock()
-	defer c.destinationsLocker.Unlock()
+	var (
+		addrs []string
+		conns map[string]*connT
+	)
+	func() {
+		c.destinationsLocker.Lock()
+		defer c.destinationsLocker.Unlock()
+		addrs = copySlice(c.destinations)
+		conns = copyMap(c.destinationConns)
+	}()
 
 	var wg sync.WaitGroup
-	for _, dst := range c.destinations {
-		if _, ok := c.destinationConns[dst]; ok {
+	for _, dst := range addrs {
+		if _, ok := conns[dst]; ok {
 			continue
 		}
 
