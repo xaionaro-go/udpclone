@@ -81,11 +81,18 @@ ip rule add ipproto udp dport 9002 lookup bt-pan pref 4020
 
 `udpclone` (launched on the client side):
 ```
-udpclone --listen-addr 0.0.0.0:5743 --destinations X.X.X.X:9000,X.X.X.X:9001,X.X.X.X:9002
+udpclone --listen-addr 0.0.0.0:5743 --destinations my.home.address:9000,my.home.address:9001,my.home.address:9002
 ```
+
+In my case `my.home.address` was a DyDNS-address.
 
 
 Server-side configuration:
 ```sh
 nft add rule nat PREROUTING iif lxc udp dport 9000-9010 ip daddr X.X.X.X dnat X.X.X.X:5743
 ```
+
+# Similar projects (and the difference)
+*(feel free to make a PR adding your project here...)*
+* https://github.com/chenx-dust/paracat. deduplicates traffic automatically, by adding a sequence number to packets and then stripping it back. Supports also Round-Robin mode. *But it does not support the case if one of the destinations not available in the beginning or the case of changing the destination IP (a-la DyDNS destinations).*
+* https://github.com/path-network/UDP-Clone. A minimalistic tool that does essentially the same as `udpclone`. *But it does not support the case if one of the destinations not available in the beginning or the case of changing the destination IP (a-la DyDNS destinations).*
