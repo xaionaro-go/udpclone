@@ -88,6 +88,13 @@ func (c *UDPCloner) tryCreatingMissingConns(ctx context.Context) {
 				return
 			}
 
+			if err := udpConn.SetWriteBuffer(bufSize); err != nil {
+				logger.Warnf(ctx, "unable to set the sending UDP buffer size: %v", err)
+			}
+			if err := udpConn.SetWriteDeadline(time.Time{}); err != nil {
+				logger.Warnf(ctx, "unable to set the sending timeout: %v", err)
+			}
+
 			conn := newConn(udpConn)
 			go func(conn *connT, dst string) {
 				err := conn.copyTo(ctx, c.listener, c)
@@ -186,11 +193,9 @@ func (c *UDPCloner) ServeContext(ctx context.Context) error {
 			}
 			sort.Strings(keys)
 
-			var wg sync.WaitGroup
 			for _, dst := range keys {
-				wg.Add(1)
-				go func(dst string) {
-					defer wg.Done()
+				msg := copySlice(msg)
+				go func(dst string, msg []byte) {
 					conn := c.getConn(ctx, dst)
 					w, err := conn.Write(msg)
 					if err == nil && w == n {
@@ -207,9 +212,8 @@ func (c *UDPCloner) ServeContext(ctx context.Context) error {
 					}
 					c.delConn(ctx, dst)
 					conn.Wait()
-				}(dst)
+				}(dst, msg)
 			}
-			wg.Wait()
 		})
 	}
 }

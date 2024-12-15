@@ -9,6 +9,7 @@ import (
 	"github.com/facebookincubator/go-belt/tool/logger"
 	"github.com/spf13/pflag"
 	"github.com/xaionaro-go/udpclone/pkg/udpcloner"
+	"github.com/xaionaro-go/udpclone/pkg/xsync"
 )
 
 func main() {
@@ -22,6 +23,9 @@ func main() {
 	ctx := context.Background()
 	ctx = logger.CtxWithLogger(ctx, logger.Default().WithLevel(loggerLevel))
 	defer belt.Flush(ctx)
+
+	ctx = xsync.WithNoLogging(ctx, true)
+	ctx = xsync.WithEnableDeadlock(ctx, false)
 
 	if *netPprofAddr != "" {
 		go func() {
