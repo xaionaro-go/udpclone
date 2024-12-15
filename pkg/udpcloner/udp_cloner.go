@@ -196,16 +196,16 @@ func (c *UDPCloner) checkResolvedAddrs(ctx context.Context) {
 			continue
 		}
 
-		logger.Debugf(ctx, "re-resolving '%s'", addr)
+		logger.Tracef(ctx, "re-resolving '%s'", addr)
 		udpAddr, err := net.ResolveUDPAddr("udp", addr)
 		if err != nil {
 			logger.Errorf(ctx, "unable to resolve '%s': %v", addr, err)
 			continue
 		}
-		logger.Debugf(ctx, "resolving '%s' as %s", addr, udpAddr)
+		logger.Tracef(ctx, "resolving '%s' as %s", addr, udpAddr)
 
 		if conn.UDPConn.RemoteAddr().String() == udpAddr.String() {
-			logger.Debugf(ctx, "the resolved address of '%s' have not changed", addr)
+			logger.Tracef(ctx, "the resolved address of '%s' have not changed", addr)
 			continue
 		}
 
