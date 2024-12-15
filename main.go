@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	_ "net/http/pprof"
+	"time"
 
 	"github.com/facebookincubator/go-belt"
 	"github.com/facebookincubator/go-belt/tool/logger"
@@ -18,6 +19,8 @@ func main() {
 	listenAddr := pflag.String("listen-addr", "0.0.0.0:9000", "")
 	destinations := pflag.StringSlice("destinations", nil, "")
 	netPprofAddr := pflag.String("go-net-pprof-addr", "", "address to listen to for net/pprof requests")
+	responseTimeout := pflag.Duration("response-timeout", 0, "amount of time to wait for any response from a destination, before considering the connection dead; set to zero to disable the feature")
+	resolveUpdateInterval := pflag.Duration("resolve-update-interval", time.Minute, "interval between refreshing the resolved addresses")
 	pflag.Parse()
 
 	ctx := context.Background()
@@ -40,11 +43,11 @@ func main() {
 	}
 
 	for _, dst := range *destinations {
-		cloner.AddDestination(ctx, dst)
+		cloner.AddDestination(ctx, dst, *responseTimeout, *resolveUpdateInterval)
 	}
 
 	logger.Infof(ctx, "started")
-	err = cloner.ServeContext(ctx)
+	err = cloner.ServeContext(ctx, *responseTimeout)
 	if err != nil {
 		logger.Panicf(ctx, "unable to serve: %v", err)
 	}

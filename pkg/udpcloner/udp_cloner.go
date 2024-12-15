@@ -13,19 +13,17 @@ import (
 	"github.com/xaionaro-go/udpclone/pkg/xsync"
 )
 
-const bufSize = 1 << 20
+const bufSize = 1 << 18
 
 type UDPCloner struct {
 	listener *net.UDPConn
-
-	clientAddrLocker xsync.Mutex
-	clientAddr       *net.UDPAddr
+	*clients
 
 	destinationsLocker     xsync.Mutex
 	destinationConnsLocker xsync.Mutex
 
-	destinations     []string
-	destinationConns map[string]*connT
+	destinations     []destination
+	destinationConns map[string]*destinationConn
 }
 
 func New(listenAddr string) (*UDPCloner, error) {
@@ -40,16 +38,23 @@ func New(listenAddr string) (*UDPCloner, error) {
 	}
 	return &UDPCloner{
 		listener:         listener,
-		destinationConns: make(map[string]*connT),
+		clients:          newClients(),
+		destinationConns: make(map[string]*destinationConn),
 	}, nil
 }
 
 func (c *UDPCloner) AddDestination(
 	ctx context.Context,
 	dst string,
+	responseTimeout time.Duration,
+	resolveUpdateInterval time.Duration,
 ) {
 	c.destinationConnsLocker.Do(ctx, func() {
-		c.destinations = append(c.destinations, dst)
+		c.destinations = append(c.destinations, destination{
+			Address:               dst,
+			ResponseTimeout:       responseTimeout,
+			ResolveUpdateInterval: resolveUpdateInterval,
+		})
 	})
 }
 
@@ -58,25 +63,25 @@ func (c *UDPCloner) tryCreatingMissingConns(ctx context.Context) {
 	defer logger.Tracef(ctx, "/tryCreatingMissingConns")
 
 	var (
-		addrs []string
-		conns map[string]*connT
+		destinations []destination
+		conns        map[string]*destinationConn
 	)
 	c.destinationsLocker.Do(ctx, func() {
-		addrs = copySlice(c.destinations)
+		destinations = copySlice(c.destinations)
 		conns = copyMap(c.destinationConns)
 	})
 
 	var wg sync.WaitGroup
-	for _, dst := range addrs {
-		if _, ok := conns[dst]; ok {
+	for _, dst := range destinations {
+		if _, ok := conns[dst.Address]; ok {
 			continue
 		}
 
 		wg.Add(1)
-		go func(dst string) {
+		go func(dst destination) {
 			defer wg.Done()
 
-			addr, err := net.ResolveUDPAddr("udp", dst)
+			addr, err := net.ResolveUDPAddr("udp", dst.Address)
 			if err != nil {
 				logger.Errorf(ctx, "unable to resolve '%s': %v", dst, err)
 				return
@@ -95,9 +100,9 @@ func (c *UDPCloner) tryCreatingMissingConns(ctx context.Context) {
 				logger.Warnf(ctx, "unable to set the sending timeout: %v", err)
 			}
 
-			conn := newConn(udpConn)
-			go func(conn *connT, dst string) {
-				err := conn.copyTo(ctx, c.listener, c)
+			conn := newDestinationConn(udpConn, dst)
+			go func(conn *destinationConn, dst destination) {
+				err := conn.copyTo(ctx, c.listener, c.clients)
 				if err == nil {
 					return
 				}
@@ -107,28 +112,22 @@ func (c *UDPCloner) tryCreatingMissingConns(ctx context.Context) {
 					if errors.As(conn.Close(), &ErrAlreadyClosed{}) {
 						return
 					}
-					c.delConn(ctx, dst)
+					c.delConn(ctx, dst.Address)
 					conn.Wait()
 				})
 			}(conn, dst)
 			logger.Debugf(ctx, "connected to '%s'", dst)
-			c.setConn(ctx, dst, conn)
+			c.setConn(ctx, dst.Address, conn)
 		}(dst)
 	}
 
 	wg.Wait()
 }
 
-func (c *UDPCloner) GetClientAddr(ctx context.Context) *net.UDPAddr {
-	return xsync.DoR1(ctx, &c.clientAddrLocker, func() *net.UDPAddr {
-		return c.clientAddr
-	})
-}
-
 func (c *UDPCloner) setConn(
 	ctx context.Context,
 	addr string,
-	conn *connT,
+	conn *destinationConn,
 ) {
 	c.destinationConnsLocker.Do(ctx, func() {
 		c.destinationConns[addr] = conn
@@ -138,8 +137,8 @@ func (c *UDPCloner) setConn(
 func (c *UDPCloner) getConn(
 	ctx context.Context,
 	addr string,
-) *connT {
-	return xsync.DoR1(ctx, &c.destinationConnsLocker, func() *connT {
+) *destinationConn {
+	return xsync.DoR1(ctx, &c.destinationConnsLocker, func() *destinationConn {
 		return c.destinationConns[addr]
 	})
 }
@@ -153,7 +152,75 @@ func (c *UDPCloner) delConn(
 	})
 }
 
-func (c *UDPCloner) ServeContext(ctx context.Context) error {
+func (c *UDPCloner) killStaleDestinationConns(ctx context.Context) {
+	now := time.Now()
+
+	c.destinationConnsLocker.Do(ctx, func() {
+		for addr, conn := range c.destinationConns {
+			if conn.destination.ResponseTimeout <= 0 {
+				continue
+			}
+
+			lastSendTS := conn.LastSendTS.Load().(time.Time)
+			lastReceiveTS := conn.LastReceiveTS.Load().(time.Time)
+			if !lastReceiveTS.Before(lastSendTS) {
+				continue
+			}
+			if now.Sub(lastReceiveTS) <= conn.destination.ResponseTimeout {
+				continue
+			}
+
+			logger.Errorf(ctx, "timed out on waiting for a response from destination '%s'", conn.RemoteAddr().String())
+			if errors.As(conn.Close(), &ErrAlreadyClosed{}) {
+				continue
+			}
+			delete(c.destinationConns, addr)
+			conn.Wait()
+		}
+	})
+}
+
+func (c *UDPCloner) checkResolvedAddrs(ctx context.Context) {
+	now := time.Now()
+
+	c.destinationConnsLocker.Do(ctx, func() {
+		for addr, conn := range c.destinationConns {
+			if conn.destination.ResolveUpdateInterval <= 0 {
+				continue
+			}
+
+			resolveTS := conn.ResolveTS.Load().(time.Time)
+			if now.Sub(resolveTS) <= conn.destination.ResolveUpdateInterval {
+				continue
+			}
+
+			logger.Debugf(ctx, "re-resolving '%s'", addr)
+			udpAddr, err := net.ResolveUDPAddr("udp", addr)
+			if err != nil {
+				logger.Errorf(ctx, "unable to resolve '%s': %v", addr, err)
+				continue
+			}
+			logger.Debugf(ctx, "resolving '%s' as %s", addr, udpAddr)
+
+			if conn.UDPConn.RemoteAddr().String() == udpAddr.String() {
+				logger.Debugf(ctx, "the resolved address of '%s' have not changed", addr)
+				continue
+			}
+
+			logger.Infof(ctx, "the resolved address of '%s' have changed to '%s', closing the old connection (%s)", addr, udpAddr.String(), conn.RemoteAddr().String())
+			if errors.As(conn.Close(), &ErrAlreadyClosed{}) {
+				continue
+			}
+			delete(c.destinationConns, addr)
+			conn.Wait()
+		}
+	})
+}
+
+func (c *UDPCloner) ServeContext(
+	ctx context.Context,
+	clientResponseTimeout time.Duration,
+) error {
 	ctx, cancelFn := context.WithCancel(ctx)
 	defer cancelFn()
 
@@ -166,6 +233,9 @@ func (c *UDPCloner) ServeContext(ctx context.Context) error {
 			case <-ctx.Done():
 				return
 			case <-t.C:
+				c.clients.RemoveStaleClients(ctx)
+				c.killStaleDestinationConns(ctx)
+				c.checkResolvedAddrs(ctx)
 				c.tryCreatingMissingConns(ctx)
 			}
 		}
@@ -181,39 +251,41 @@ func (c *UDPCloner) ServeContext(ctx context.Context) error {
 		if n >= bufSize {
 			return fmt.Errorf("received too large message, not supported yet: %d >= %d", n, bufSize)
 		}
-		c.clientAddrLocker.Do(ctx, func() {
-			c.clientAddr = udpAddr
-		})
+		err = c.clients.Add(ctx, udpAddr, clientResponseTimeout)
+		if err != nil {
+			logger.Errorf(ctx, "cannot add the client '%s': %v", udpAddr, err)
+		}
 
-		msg := buf[:n]
-		c.destinationsLocker.Do(ctx, func() {
-			keys := make([]string, 0, len(c.destinationConns))
+		var addrs []string
+		c.destinationConnsLocker.Do(ctx, func() {
+			addrs = make([]string, 0, len(c.destinationConns))
 			for key := range c.destinationConns {
-				keys = append(keys, key)
+				addrs = append(addrs, key)
 			}
-			sort.Strings(keys)
-
-			for _, dst := range keys {
-				msg := copySlice(msg)
-				go func(dst string, msg []byte) {
-					conn := c.getConn(ctx, dst)
-					w, err := conn.Write(msg)
-					if err == nil && w == n {
-						logger.Tracef(ctx, "wrote a message from the listener to '%s' of size %d", dst, n)
-						return
-					}
-					if err != nil {
-						logger.Errorf(ctx, "unable to write to '%s': %v", conn.RemoteAddr().String(), err)
-					} else {
-						logger.Errorf(ctx, "wrote a short message to '%s': %d != %d", conn.RemoteAddr().String(), w, n)
-					}
-					if errors.As(conn.Close(), &ErrAlreadyClosed{}) {
-						return
-					}
-					c.delConn(ctx, dst)
-					conn.Wait()
-				}(dst, msg)
-			}
+			sort.Strings(addrs)
 		})
+
+		msg := copySlice(buf[:n])
+		for _, addr := range addrs {
+			go func(dst string, msg []byte) {
+				conn := c.getConn(ctx, dst)
+				conn.LastSendTS.Store(time.Now())
+				w, err := conn.Write(msg)
+				if err == nil && w == n {
+					logger.Tracef(ctx, "wrote a message from the listener to '%s' of size %d", dst, n)
+					return
+				}
+				if err != nil {
+					logger.Errorf(ctx, "unable to write to '%s': %v", conn.RemoteAddr().String(), err)
+				} else {
+					logger.Errorf(ctx, "wrote a short message to '%s': %d != %d", conn.RemoteAddr().String(), w, n)
+				}
+				if errors.As(conn.Close(), &ErrAlreadyClosed{}) {
+					return
+				}
+				c.delConn(ctx, dst)
+				conn.Wait()
+			}(addr, msg)
+		}
 	}
 }
