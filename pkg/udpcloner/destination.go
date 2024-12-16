@@ -178,7 +178,7 @@ type destinationConn struct {
 }
 
 func (dst *destination) setNewConn(
-	ctx context.Context,
+	_ context.Context,
 	remote *net.UDPConn,
 ) *destinationConn {
 	c := &destinationConn{
@@ -189,9 +189,7 @@ func (dst *destination) setNewConn(
 	c.LastSendTS.Store(time.Now())
 	c.LastReceiveTS.Store(time.Now())
 	c.ResolveTS.Store(time.Now())
-	dst.locker.Do(ctx, func() {
-		dst.conn = c
-	})
+	dst.conn = c
 	return c
 }
 
