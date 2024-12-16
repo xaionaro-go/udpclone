@@ -92,7 +92,7 @@ func (dst *destination) tryConnect(
 
 	conn := dst.setNewConn(ctx, udpConn)
 	go conn.ServeConnContext(ctx, clientsHandler)
-	logger.Debugf(ctx, "connected to '%s'", dst)
+	logger.Debugf(ctx, "connected to '%s'", dst.Address)
 
 }
 
@@ -297,7 +297,7 @@ func (c *destinationConn) copyTo(
 	clientsHandler clientsHandler,
 ) (_err error) {
 	logger.Debugf(ctx, "connT[%s].copyTo()", c.UDPConn.RemoteAddr().String())
-	defer logger.Debugf(ctx, "/connT[%s].copyTo(): %v", c.UDPConn.RemoteAddr().String(), _err)
+	defer func() { logger.Debugf(ctx, "/connT[%s].copyTo(): %v", c.UDPConn.RemoteAddr().String(), _err) }()
 
 	go func() {
 		<-ctx.Done()
