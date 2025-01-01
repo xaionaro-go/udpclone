@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/facebookincubator/go-belt"
 	"github.com/facebookincubator/go-belt/tool/logger"
 )
 
@@ -42,6 +43,8 @@ func (c *UDPCloner) ServeContext(
 	defer cancelFn()
 
 	for _, dst := range c.destinations.destinations {
+		ctx := belt.WithField(ctx, "destination", dst.Address)
+		ctx = belt.WithField(ctx, "traffic_direction", "backward")
 		go dst.ServeContext(ctx, c)
 	}
 
@@ -65,9 +68,12 @@ func (c *UDPCloner) ServeContext(
 		if client != nil {
 			client.LastReceiveTS.Store(time.Now())
 		}
+		ctx := belt.WithField(ctx, "client", udpAddr.String())
 
 		msg := copySlice(buf[:n])
 		c.destinations.ForEachConnection(ctx, func(dst *destinationConn) {
+			ctx := belt.WithField(ctx, "destination", dst.destination.Address)
+			ctx = belt.WithField(ctx, "traffic_direction", "forward")
 			dst.QueueMessage(ctx, msg)
 		})
 	}

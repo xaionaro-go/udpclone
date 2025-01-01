@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/facebookincubator/go-belt"
 	"github.com/facebookincubator/go-belt/tool/logger"
 	"github.com/xaionaro-go/udpclone/pkg/xsync"
 )
@@ -99,6 +100,7 @@ func (dst *destination) tryConnect(
 
 func (c *destinationConn) dieIfStale(ctx context.Context) {
 	dst := c.destination
+	logger.Tracef(ctx, "dieIfStale: %#+v", dst)
 	if dst.ResponseTimeout <= 0 {
 		return
 	}
@@ -119,6 +121,7 @@ func (c *destinationConn) dieIfStale(ctx context.Context) {
 
 func (c *destinationConn) reresolveAddrIfNeeded(ctx context.Context) {
 	dst := c.destination
+	logger.Tracef(ctx, "reresolveAddrIfNeeded: %#+v", dst)
 
 	resolveTS := dst.conn.ResolveTS.Load().(time.Time)
 	if time.Since(resolveTS) <= dst.ResolveUpdateInterval {
@@ -217,8 +220,10 @@ type clientsHandler interface {
 func (c *destinationConn) ServeConnContext(
 	ctx context.Context,
 	clientsHandler clientsHandler,
-) error {
+) (_err error) {
 	var wg sync.WaitGroup
+	logger.Tracef(ctx, "ServeConnContext")
+	defer func() { logger.Tracef(ctx, "/ServeConnContext: %v", _err) }()
 
 	ctx, cancelFn := context.WithCancel(ctx)
 	defer cancelFn()
@@ -228,6 +233,7 @@ func (c *destinationConn) ServeConnContext(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer logger.Tracef(ctx, "the copying loop ended")
 		err := c.copyTo(ctx, clientsHandler)
 		if err == nil {
 			errCh <- fmt.Errorf("the copying loop ended")
@@ -239,11 +245,13 @@ func (c *destinationConn) ServeConnContext(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer logger.Tracef(ctx, "the maintenance loop ended")
 		defer func() {
 			errCh <- fmt.Errorf("the maintenance loop ended")
 		}()
 
 		t := time.NewTicker(time.Second)
+		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
@@ -259,6 +267,7 @@ func (c *destinationConn) ServeConnContext(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer logger.Tracef(ctx, "the main loop ended")
 		for {
 			select {
 			case <-ctx.Done():
@@ -334,6 +343,7 @@ func (c *destinationConn) copyTo(
 		msg := copySlice(buf[:n])
 		clientsHandler.WithClients(ctx, func(clients []*client) {
 			for _, client := range clients {
+				ctx := belt.WithField(ctx, "client", client.UDPAddr.String())
 				client.QueueMessage(ctx, msg)
 			}
 		})
