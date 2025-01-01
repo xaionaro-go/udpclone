@@ -55,12 +55,15 @@ func (c *UDPCloner) ServeContext(
 		if n >= bufSize {
 			return fmt.Errorf("received too large message, not supported yet: %d >= %d", n, bufSize)
 		}
-		client, err := c.clients.Add(ctx, c.listener, udpAddr, clientResponseTimeout)
+		client, isNew, err := c.clients.Add(ctx, c.listener, udpAddr, clientResponseTimeout)
 		if err != nil {
 			logger.Errorf(ctx, "cannot add the client '%s': %v", udpAddr, err)
 		}
-		if client != nil {
+		if isNew {
 			go client.ServeContext(ctx, c)
+		}
+		if client != nil {
+			client.LastReceiveTS.Store(time.Now())
 		}
 
 		msg := copySlice(buf[:n])

@@ -34,20 +34,20 @@ func (c *clients) Add(
 	udpListener *net.UDPConn,
 	udpAddr *net.UDPAddr,
 	responseTimeout time.Duration,
-) (*client, error) {
-	return xsync.DoR2(ctx, &c.locker, func() (*client, error) {
+) (*client, bool, error) {
+	return xsync.DoR3(ctx, &c.locker, func() (*client, bool, error) {
 		key := udpAddr.String()
-		if _, ok := c.clientsMap[key]; ok {
-			return nil, nil
+		if client, ok := c.clientsMap[key]; ok {
+			return client, false, nil
 		}
 		if len(c.clients) >= maxClients {
-			return nil, fmt.Errorf("maximum clients (%d) reached, cannot add more", maxClients)
+			return nil, false, fmt.Errorf("maximum clients (%d) reached, cannot add more", maxClients)
 		}
 		client := newClient(udpListener, udpAddr, responseTimeout)
 
 		c.clientsMap[key] = client
 		c.clients = append(c.clients, client)
-		return client, nil
+		return client, true, nil
 	})
 }
 
@@ -193,5 +193,6 @@ func (c *client) sendMessage(
 	if w != len(msg) {
 		return fmt.Errorf("wrote a short message to '%s': %d != %d", addr.String(), w, len(msg))
 	}
+	c.LastSendTS.Store(time.Now())
 	return nil
 }
