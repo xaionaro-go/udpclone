@@ -30,6 +30,7 @@ func (dsts *destinations) AddDestination(
 	responseTimeout time.Duration,
 	resolveUpdateInterval time.Duration,
 ) {
+	logger.Debugf(ctx, "AddDestination: %s", dstString)
 	dst := newDestination(dstString, responseTimeout, resolveUpdateInterval)
 	dsts.locker.Do(ctx, func() {
 		dsts.destinations = append(dsts.destinations, dst)
@@ -104,6 +105,7 @@ func (c *destinationConn) dieIfStale(ctx context.Context) {
 
 	lastSendTS := c.LastSendTS.Load().(time.Time)
 	lastReceiveTS := c.LastReceiveTS.Load().(time.Time)
+	logger.Tracef(ctx, "lastSend: %v; lastReceive: %v", lastSendTS, lastReceiveTS)
 	if !lastReceiveTS.Before(lastSendTS) {
 		return
 	}
@@ -193,8 +195,10 @@ func (dst *destination) setNewConn(
 	return c
 }
 
-func (c *destination) Close() error {
+func (c *destination) Close() (_err error) {
 	ctx := context.TODO()
+	logger.Debugf(ctx, "destination[%v].Close()", c.Address)
+	defer func() { logger.Tracef(ctx, "/destination[%v].Close(): %v", c.Address, _err) }()
 	return xsync.DoR1(ctx, &c.locker, func() error {
 		if c.conn == nil {
 			return ErrAlreadyClosed{}
@@ -245,6 +249,7 @@ func (c *destinationConn) ServeConnContext(
 			case <-ctx.Done():
 				errCh <- ctx.Err()
 			case <-t.C:
+				logger.Tracef(ctx, "time to recheck if everything is OK on %v", c.destination.Address)
 				c.dieIfStale(ctx)
 				c.reresolveAddrIfNeeded(ctx)
 			}
@@ -277,6 +282,7 @@ func (c *destinationConn) ServeConnContext(
 	go c.destination.Close()
 	cancelFn()
 	wg.Wait()
+	logger.Debugf(ctx, "stopped serving connection to '%s'", c.destination.Address)
 	return err
 }
 
