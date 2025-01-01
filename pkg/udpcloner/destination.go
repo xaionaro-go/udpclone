@@ -294,6 +294,7 @@ func (c *destinationConn) sendMessage(
 	if n != len(msg) {
 		return fmt.Errorf("invalid length of the sent message: %d != %d", n, len(msg))
 	}
+	c.LastSendTS.Store(time.Now())
 
 	return err
 }
