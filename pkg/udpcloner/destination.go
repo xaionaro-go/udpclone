@@ -84,7 +84,7 @@ func (dst *destination) tryConnect(
 
 	udpConn, err := net.DialUDP("udp", nil, addr)
 	if err != nil {
-		logger.Tracef(ctx, "unable to connect to '%s': %v", dst, err)
+		logger.Tracef(ctx, "unable to connect to '%s': %v", dst.Address, err)
 		return
 	}
 
@@ -95,12 +95,11 @@ func (dst *destination) tryConnect(
 	conn := dst.setNewConn(ctx, udpConn)
 	go conn.ServeConnContext(ctx, clientsHandler)
 	logger.Debugf(ctx, "connected to '%s'", dst.Address)
-
 }
 
 func (c *destinationConn) dieIfStale(ctx context.Context) {
 	dst := c.destination
-	logger.Tracef(ctx, "dieIfStale: %#+v", dst)
+	logger.Tracef(ctx, "dieIfStale: '%s'", dst.Address)
 	if dst.ResponseTimeout <= 0 {
 		return
 	}
@@ -121,7 +120,7 @@ func (c *destinationConn) dieIfStale(ctx context.Context) {
 
 func (c *destinationConn) reresolveAddrIfNeeded(ctx context.Context) {
 	dst := c.destination
-	logger.Tracef(ctx, "reresolveAddrIfNeeded: %#+v", dst)
+	logger.Tracef(ctx, "reresolveAddrIfNeeded: '%s'", dst.Address)
 
 	resolveTS := dst.conn.ResolveTS.Load().(time.Time)
 	if time.Since(resolveTS) <= dst.ResolveUpdateInterval {
