@@ -35,6 +35,10 @@ func New(listenAddr string) (*UDPCloner, error) {
 	}, nil
 }
 
+func (c *UDPCloner) Listener() *net.UDPConn {
+	return c.listener
+}
+
 func (c *UDPCloner) ServeContext(
 	ctx context.Context,
 	clientResponseTimeout time.Duration,

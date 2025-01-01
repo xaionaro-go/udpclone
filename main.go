@@ -46,7 +46,7 @@ func main() {
 		cloner.AddDestination(ctx, dst, *responseTimeout, *resolveUpdateInterval)
 	}
 
-	logger.Infof(ctx, "started")
+	logger.Infof(ctx, "started at %s", cloner.Listener().LocalAddr())
 	err = cloner.ServeContext(ctx, *responseTimeout)
 	if err != nil {
 		logger.Panicf(ctx, "unable to serve: %v", err)
