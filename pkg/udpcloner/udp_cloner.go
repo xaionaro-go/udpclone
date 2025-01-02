@@ -58,19 +58,18 @@ func (c *UDPCloner) ServeContext(
 		if err != nil {
 			return fmt.Errorf("unable to read from the listener: %w", err)
 		}
-		logger.Tracef(ctx, "received on the listener a message of size %d", n)
+		logger.Tracef(ctx, "received on the listener a message of size %d from '%s'", n, udpAddr)
 		if n >= bufSize {
 			return fmt.Errorf("received too large message, not supported yet: %d >= %d", n, bufSize)
 		}
-		client, isNew, err := c.clients.Add(ctx, c.listener, udpAddr, clientResponseTimeout)
+		client, isNew, err := c.clients.CreateOrGet(ctx, c.listener, udpAddr, clientResponseTimeout)
 		if err != nil {
 			logger.Errorf(ctx, "cannot add the client '%s': %v", udpAddr, err)
+		} else {
+			client.LastReceiveTS.Store(time.Now())
 		}
 		if isNew {
 			go client.ServeContext(ctx, c)
-		}
-		if client != nil {
-			client.LastReceiveTS.Store(time.Now())
 		}
 		ctx := belt.WithField(ctx, "client", udpAddr.String())
 

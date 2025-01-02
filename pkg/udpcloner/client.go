@@ -29,7 +29,7 @@ func newClients() *clients {
 	}
 }
 
-func (c *clients) Add(
+func (c *clients) CreateOrGet(
 	ctx context.Context,
 	udpListener *net.UDPConn,
 	udpAddr *net.UDPAddr,
@@ -74,8 +74,8 @@ func (c *clients) removeClient(
 	key := client.UDPAddr.String()
 	delete(c.clientsMap, key)
 	c.clients = c.clients[:0]
-	for _, addr := range c.clientsMap {
-		c.clients = append(c.clients, addr)
+	for _, client := range c.clientsMap {
+		c.clients = append(c.clients, client)
 	}
 }
 
@@ -84,8 +84,13 @@ func (c *client) killIfStale(
 	clientsHandler clientsHandler,
 	cancelFn context.CancelFunc,
 ) {
+	if c.ResponseTimeout <= 0 {
+		return
+	}
+
 	lastSendTS := c.LastSendTS.Load().(time.Time)
 	lastReceiveTS := c.LastReceiveTS.Load().(time.Time)
+	logger.Tracef(ctx, "lastSend: %v; lastReceive: %v", lastSendTS, lastReceiveTS)
 	if !lastReceiveTS.Before(lastSendTS) {
 		return
 	}
@@ -138,6 +143,8 @@ func (c *client) ServeContext(
 	ctx context.Context,
 	clientsHandler clientsHandler,
 ) {
+	logger.Debugf(ctx, "ServeContext: '%s'", c.UDPAddr)
+	defer logger.Tracef(ctx, "/ServeContext: '%s'", c.UDPAddr)
 	ctx, cancelFn := context.WithCancel(ctx)
 	defer cancelFn()
 
