@@ -14,7 +14,7 @@ import (
 
 const (
 	maxClients       = 30 // we currently limit the amount of clients because of the ugly algo how we remove a client.
-	messageQueueSize = 4
+	messageQueueSize = 1024
 )
 
 type clients struct {
